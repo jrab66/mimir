@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -696,6 +697,7 @@ func (d *Distributor) prePushHaDedupeMiddleware(next push.Func) push.Func {
 		if err != nil {
 			return err
 		}
+		d.logHisto(req, "PUSH HADEDUPE")
 
 		userID, err := tenant.TenantID(ctx)
 		if err != nil {
@@ -768,6 +770,7 @@ func (d *Distributor) prePushRelabelMiddleware(next push.Func) push.Func {
 		if err != nil {
 			return err
 		}
+		d.logHisto(req, "PUSH RELABEL")
 
 		userID, err := tenant.TenantID(ctx)
 		if err != nil {
@@ -837,6 +840,7 @@ func (d *Distributor) prePushValidationMiddleware(next push.Func) push.Func {
 		if err != nil {
 			return err
 		}
+		d.logHisto(req, "PUSH VALIDATION")
 
 		userID, err := tenant.TenantID(ctx)
 		if err != nil {
@@ -976,6 +980,7 @@ func (d *Distributor) metricsMiddleware(next push.Func) push.Func {
 		if err != nil {
 			return err
 		}
+		d.logHisto(req, "PUSH METRICS")
 
 		userID, err := tenant.TenantID(ctx)
 		if err != nil {
@@ -1055,6 +1060,7 @@ func (d *Distributor) limitsMiddleware(next push.Func) push.Func {
 		if err != nil {
 			return err
 		}
+		d.logHisto(req, "PUSH LIMITS")
 		reqSize := int64(req.Size())
 		inflightBytes := d.inflightPushRequestsBytes.Add(reqSize)
 		pushReq.AddCleanup(func() {
@@ -1102,6 +1108,19 @@ func (d *Distributor) handlePushError(ctx context.Context, pushErr error) error 
 	return pushErr
 }
 
+func (d *Distributor) logHisto(req *mimirpb.WriteRequest, notes string) {
+	for _, ts := range req.Timeseries {
+		metric := mimirpb.FromLabelAdaptersToMetric(ts.Labels)
+		job, ok := metric["job"]
+		if !ok {
+			job = "i dunno"
+		}
+		if strings.Contains(string(job), "simple_server") && (strings.HasPrefix(metric.String(), "ping_request_count") || strings.HasPrefix(metric.String(), "random_histo") || strings.HasPrefix(metric.String(), "mixed")) {
+			level.Error(d.log).Log("msg", notes, metric.String())
+		}
+	}
+}
+
 // push takes a write request and distributes it to ingesters using the ring.
 // Strings in pushReq may be pointers into the gRPC buffer which will be reused, so must be copied if retained.
 // push does not check limits like ingestion rate and inflight requests.
@@ -1118,6 +1137,7 @@ func (d *Distributor) push(ctx context.Context, pushReq *push.Request) error {
 	if err != nil {
 		return err
 	}
+	d.logHisto(req, "PUSH ITSELF")
 
 	userID, err := tenant.TenantID(ctx)
 	if err != nil {
