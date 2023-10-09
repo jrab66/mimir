@@ -87,7 +87,14 @@ func (summer *shardSummer) MapExpr(expr parser.Expr) (mapped parser.Expr, finish
 	}
 
 	switch e := expr.(type) {
+	default:
+		fmt.Println(e)
+	}
+
+	switch e := expr.(type) {
 	case *parser.AggregateExpr:
+		// fmt.Println(e)
+		// return e, true, nil
 		if summer.currentShard != nil {
 			return e, false, nil
 		}
@@ -115,6 +122,8 @@ func (summer *shardSummer) MapExpr(expr parser.Expr) (mapped parser.Expr, finish
 				if !CanParallelize(e, summer.logger) {
 					return e, true, nil
 				}
+				fmt.Println(e)
+				return e, true, nil
 				return summer.shardAndSquashFuncCall(e)
 			}
 			return e, false, nil

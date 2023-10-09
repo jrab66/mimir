@@ -1147,8 +1147,8 @@ func TestWeirdThing(t *testing.T) {
 	step := 15 * time.Second
 
 	seriesName := `audio_full_tick_times_bucket{cluster="eu-west4", pod=~"showcase-main-nightly-scale-te-skypark-p.*"}`
-	// query := fmt.Sprintf("histogram_quantile(1, sum(rate(%s[1m])) by (le))", seriesName)
-	query := fmt.Sprintf("sum(rate(%s[1m])) by (le)", seriesName)
+	query := fmt.Sprintf("histogram_quantile(1, sum(rate(%s[1m])) by (le))", seriesName)
+	// query := fmt.Sprintf("sum(rate(%s[1m])) by (le)", seriesName)
 
 	req := &PrometheusRangeQueryRequest{
 		Path:  "/query_range",
@@ -1201,12 +1201,12 @@ func TestWeirdThing(t *testing.T) {
 	require.NotEmpty(t, shardedRes.(*PrometheusResponse).Data.Result)
 
 	// checkBuckets(t, expectedRes.(*PrometheusResponse))
-	checkBuckets(t, shardedRes.(*PrometheusResponse))
+	// checkBuckets(t, shardedRes.(*PrometheusResponse))
 
 	// Ensure the two results matches (float precision can slightly differ, there's no guarantee in PromQL engine too
 	// if you rerun the same query twice).
 	// approximatelyEquals(t, expectedRes.(*PrometheusResponse), shardedRes.(*PrometheusResponse))
-	// require.Equal(t, expectedRes.(*PrometheusResponse), shardedRes.(*PrometheusResponse))
+	require.Equal(t, expectedRes.(*PrometheusResponse), shardedRes.(*PrometheusResponse))
 }
 
 func checkBuckets(t *testing.T, res *PrometheusResponse) {
