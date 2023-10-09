@@ -9,8 +9,10 @@ package querymiddleware
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"math"
 	"net/http"
+	"os"
 	"runtime"
 	"sort"
 	"strconv"
@@ -1078,6 +1080,178 @@ func testQueryShardingFunctionCorrectness(t *testing.T, queryable storage.Querya
 		// It's OK if it's tested. Ignore if it's one of the non parallelizable functions.
 		_, ok := testedFns[expectedFn]
 		assert.Truef(t, ok || util.StringsContain(astmapper.NonParallelFuncs, expectedFn), "%s should be tested", expectedFn)
+	}
+}
+
+type JsonContents struct {
+	Status string
+	Data   JsonData
+}
+
+type JsonData struct {
+	ResultType string
+	Result     []JsonResult
+}
+
+type JsonResult struct {
+	Metric map[string]string
+	Values []Value
+}
+
+type Value struct {
+	ts    float64
+	float string
+}
+
+func (t *Value) UnmarshalJSON(b []byte) error {
+	a := []interface{}{&t.ts, &t.float}
+	return json.Unmarshal(b, &a)
+}
+
+func TestWeirdThing(t *testing.T) {
+	jsonFile, err := os.Open("/home/j/improbable_data.json")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer jsonFile.Close()
+
+	byteValue, _ := ioutil.ReadAll(jsonFile)
+
+	var result JsonContents
+	json.Unmarshal(byteValue, &result)
+
+	storageSeries := make([]*promql.StorageSeries, 0)
+	for _, res := range result.Data.Result {
+		var floats []promql.FPoint
+		for _, val := range res.Values {
+			f, err := strconv.ParseFloat(val.float, 64)
+			require.NoError(t, err)
+			floats = append(floats, promql.FPoint{
+				T: int64(val.ts * 1000),
+				F: f,
+			})
+		}
+		nss := promql.NewStorageSeries(promql.Series{
+			Metric:     labels.FromMap(res.Metric),
+			Floats:     floats,
+			Histograms: make([]promql.HPoint, 0),
+		})
+		storageSeries = append(storageSeries, nss)
+	}
+	queryable := storageSeriesQueryable(storageSeries)
+
+	const numShards = 8
+	start := time.Unix(1688967495, 0)
+	end := time.Unix(1688967618, 0)
+	step := 15 * time.Second
+
+	seriesName := `audio_full_tick_times_bucket{cluster="eu-west4", pod=~"showcase-main-nightly-scale-te-skypark-p.*"}`
+	// query := fmt.Sprintf("histogram_quantile(1, sum(rate(%s[1m])) by (le))", seriesName)
+	query := fmt.Sprintf("sum(rate(%s[1m])) by (le)", seriesName)
+
+	req := &PrometheusRangeQueryRequest{
+		Path:  "/query_range",
+		Start: util.TimeToMillis(start),
+		End:   util.TimeToMillis(end),
+		Step:  step.Milliseconds(),
+		Query: query,
+	}
+
+	reg := prometheus.NewPedanticRegistry()
+	engine := newEngine()
+	shardingware := newQueryShardingMiddleware(
+		log.NewNopLogger(),
+		engine,
+		mockLimits{totalShards: numShards},
+		0,
+		reg,
+	)
+	// codec := newTestPrometheusCodec()
+	// shardingware := newSplitAndCacheMiddleware(
+	// 	true,
+	// 	false, // Cache disabled.
+	// 	15*time.Second,
+	// 	mockLimits{},
+	// 	codec,
+	// 	nil,
+	// 	nil,
+	// 	nil,
+	// 	nil,
+	// 	log.NewNopLogger(),
+	// 	reg,
+	// )
+	downstream := &downstreamHandler{
+		engine:    engine,
+		queryable: queryable,
+	}
+
+	// Run the query without sharding.
+	expectedRes, err := downstream.Do(context.Background(), req)
+	require.Nil(t, err)
+
+	// Ensure the query produces some results.
+	require.NotEmpty(t, expectedRes.(*PrometheusResponse).Data.Result)
+
+	// Run the query with sharding.
+	shardedRes, err := shardingware.Wrap(downstream).Do(user.InjectOrgID(context.Background(), "test"), req)
+	require.Nil(t, err)
+
+	// Ensure the query produces some results.
+	require.NotEmpty(t, shardedRes.(*PrometheusResponse).Data.Result)
+
+	// checkBuckets(t, expectedRes.(*PrometheusResponse))
+	checkBuckets(t, shardedRes.(*PrometheusResponse))
+
+	// Ensure the two results matches (float precision can slightly differ, there's no guarantee in PromQL engine too
+	// if you rerun the same query twice).
+	// approximatelyEquals(t, expectedRes.(*PrometheusResponse), shardedRes.(*PrometheusResponse))
+	// require.Equal(t, expectedRes.(*PrometheusResponse), shardedRes.(*PrometheusResponse))
+}
+
+func checkBuckets(t *testing.T, res *PrometheusResponse) {
+	// fmt.Println(res.Data.Result)
+	n := len(res.Data.Result)
+	m := make(map[float64][]mimirpb.Sample, n)
+	a := make([]float64, 0, n)
+	numSamples := len(res.Data.Result[0].Samples)
+	for _, r := range res.Data.Result {
+		if len(r.Samples) != numSamples {
+			panic("mismatched sample counts")
+		}
+		if len(r.Labels) != 1 {
+			panic("not 1 label")
+		}
+		if r.Labels[0].Name != "le" {
+			panic("not le")
+		}
+		bucket, err := strconv.ParseFloat(r.Labels[0].Value, 64)
+		if err != nil {
+			panic("cannot convert bucket to float")
+		}
+		m[bucket] = r.Samples
+		a = append(a, bucket)
+	}
+	sort.Float64s(a)
+	for i := range res.Data.Result[0].Samples {
+		refSample := m[a[0]][i]
+		refTs := refSample.TimestampMs
+		prev := refSample.Value
+		for _, b := range a[1:] {
+			sample := m[b][i]
+			ts := sample.TimestampMs
+			if ts != refTs {
+				panic("mismatched timestamps")
+			}
+			curr := sample.Value
+			if prev > curr {
+				// panic(fmt.Sprintf("non-monotonic ts %d %.0f %.10f %.10f", i, b, prev, curr))
+				fmt.Printf("non-monotonic ts %d %.0f %.10f %.10f\n", i, b, prev, curr)
+			} else {
+				fmt.Printf("monotonic ts %d %.0f %.10f %.10f\n", i, b, prev, curr)
+			}
+			prev = curr
+		}
 	}
 }
 
