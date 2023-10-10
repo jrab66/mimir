@@ -291,6 +291,12 @@ func (s *querySharding) getShardsForQuery(ctx context.Context, tenantIDs []strin
 
 	// Honor the number of shards specified in the request (if any).
 	if r.GetOptions().TotalShards > 0 {
+		level.Debug(spanLog).Log(
+			"msg",
+			"number of shards has been adjusted to honor the total shards hint",
+			"total shards",
+			int(r.GetOptions().TotalShards),
+		)
 		totalShards = int(r.GetOptions().TotalShards)
 	}
 
