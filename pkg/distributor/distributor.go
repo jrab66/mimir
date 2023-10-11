@@ -944,6 +944,8 @@ func (d *Distributor) prePushValidationMiddleware(next push.Func) push.Func {
 			d.discardedSamplesRateLimited.WithLabelValues(userID, group).Add(float64(validatedSamples))
 			d.discardedExemplarsRateLimited.WithLabelValues(userID).Add(float64(validatedExemplars))
 			d.discardedMetadataRateLimited.WithLabelValues(userID).Add(float64(validatedMetadata))
+
+			pushReq.AddHeader("Retry-After", []string{"5"})
 			return distributorerror.NewIngestionRateLimited(validation.FormatIngestionRateLimitedMessage(d.limits.IngestionRate(userID), d.limits.IngestionBurstSize(userID)))
 		}
 
@@ -1044,7 +1046,7 @@ func (d *Distributor) limitsMiddleware(next push.Func) push.Func {
 		now := mtime.Now()
 		if !d.requestRateLimiter.AllowN(now, userID, 1) {
 			d.discardedRequestsRateLimited.WithLabelValues(userID).Add(1)
-
+			pushReq.AddHeader("Retry-After", []string{"5"})
 			return distributorerror.RequestRateLimitedErrorf(validation.FormatRequestRateLimitedMessage(d.limits.RequestRate(userID), d.limits.RequestBurstSize(userID)))
 		}
 
@@ -1082,11 +1084,11 @@ func (d *Distributor) Push(ctx context.Context, req *mimirpb.WriteRequest) (*mim
 	if pushErr == nil {
 		return &mimirpb.WriteResponse{}, nil
 	}
-	handledErr := d.handlePushError(ctx, pushErr)
+	handledErr := d.handlePushError(ctx, pushErr, pushReq)
 	return nil, handledErr
 }
 
-func (d *Distributor) handlePushError(ctx context.Context, pushErr error) error {
+func (d *Distributor) handlePushError(ctx context.Context, pushErr error, pushReq *push.Request) error {
 	if errors.Is(pushErr, context.Canceled) {
 		return pushErr
 	}
@@ -1097,7 +1099,7 @@ func (d *Distributor) handlePushError(ctx context.Context, pushErr error) error 
 		serviceOverloadErrorEnabled = d.limits.ServiceOverloadStatusCodeOnRateLimitEnabled(userID)
 	}
 	if httpStatus, ok := distributorerror.ToHTTPStatus(pushErr, serviceOverloadErrorEnabled); ok {
-		return httpgrpc.Errorf(httpStatus, pushErr.Error())
+		return httpgrpc.ErrorfWithHeaders(httpStatus, pushReq.Headers(), pushErr.Error())
 	}
 	return pushErr
 }

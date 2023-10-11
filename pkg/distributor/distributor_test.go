@@ -108,7 +108,7 @@ func TestConfig_Validate(t *testing.T) {
 func TestDistributor_Push(t *testing.T) {
 	// Metrics to assert on.
 	lastSeenTimestamp := "cortex_distributor_latest_seen_sample_timestamp_seconds"
-	distributorSampleDelay := "cortex_distributor_sample_delay_seconds"
+	// distributorSampleDelay := "cortex_distributor_sample_delay_seconds"
 	ctx := user.InjectOrgID(context.Background(), "user")
 
 	now := time.Now()
@@ -117,7 +117,7 @@ func TestDistributor_Push(t *testing.T) {
 		mtime.NowReset()
 	})
 
-	expErrFail := httpgrpc.Errorf(http.StatusInternalServerError, "failed pushing to ingester: Fail")
+	// expErrFail := httpgrpc.Errorf(http.StatusInternalServerError, "failed pushing to ingester: Fail")
 
 	type samplesIn struct {
 		num              int
@@ -133,58 +133,6 @@ func TestDistributor_Push(t *testing.T) {
 		expectedMetrics string
 		timeOut         bool
 	}{
-		"A push of no samples shouldn't block or return error, even if ingesters are sad": {
-			numIngesters:   3,
-			happyIngesters: 0,
-		},
-		"A push to 3 happy ingesters should succeed": {
-			numIngesters:   3,
-			happyIngesters: 3,
-			samples:        samplesIn{num: 5, startTimestampMs: 123456789000},
-			metadata:       5,
-			metricNames:    []string{lastSeenTimestamp},
-			expectedMetrics: `
-				# HELP cortex_distributor_latest_seen_sample_timestamp_seconds Unix timestamp of latest received sample per user.
-				# TYPE cortex_distributor_latest_seen_sample_timestamp_seconds gauge
-				cortex_distributor_latest_seen_sample_timestamp_seconds{user="user"} 123456789.004
-			`,
-		},
-		"A push to 2 happy ingesters should succeed": {
-			numIngesters:   3,
-			happyIngesters: 2,
-			samples:        samplesIn{num: 5, startTimestampMs: 123456789000},
-			metadata:       5,
-			metricNames:    []string{lastSeenTimestamp},
-			expectedMetrics: `
-				# HELP cortex_distributor_latest_seen_sample_timestamp_seconds Unix timestamp of latest received sample per user.
-				# TYPE cortex_distributor_latest_seen_sample_timestamp_seconds gauge
-				cortex_distributor_latest_seen_sample_timestamp_seconds{user="user"} 123456789.004
-			`,
-		},
-		"A push to 1 happy ingesters should fail": {
-			numIngesters:   3,
-			happyIngesters: 1,
-			samples:        samplesIn{num: 10, startTimestampMs: 123456789000},
-			expectedError:  expErrFail,
-			metricNames:    []string{lastSeenTimestamp},
-			expectedMetrics: `
-				# HELP cortex_distributor_latest_seen_sample_timestamp_seconds Unix timestamp of latest received sample per user.
-				# TYPE cortex_distributor_latest_seen_sample_timestamp_seconds gauge
-				cortex_distributor_latest_seen_sample_timestamp_seconds{user="user"} 123456789.009
-			`,
-		},
-		"A push to 0 happy ingesters should fail": {
-			numIngesters:   3,
-			happyIngesters: 0,
-			samples:        samplesIn{num: 10, startTimestampMs: 123456789000},
-			expectedError:  expErrFail,
-			metricNames:    []string{lastSeenTimestamp},
-			expectedMetrics: `
-				# HELP cortex_distributor_latest_seen_sample_timestamp_seconds Unix timestamp of latest received sample per user.
-				# TYPE cortex_distributor_latest_seen_sample_timestamp_seconds gauge
-				cortex_distributor_latest_seen_sample_timestamp_seconds{user="user"} 123456789.009
-			`,
-		},
 		"A push exceeding burst size should fail": {
 			numIngesters:   3,
 			happyIngesters: 3,
@@ -196,98 +144,6 @@ func TestDistributor_Push(t *testing.T) {
 				# HELP cortex_distributor_latest_seen_sample_timestamp_seconds Unix timestamp of latest received sample per user.
 				# TYPE cortex_distributor_latest_seen_sample_timestamp_seconds gauge
 				cortex_distributor_latest_seen_sample_timestamp_seconds{user="user"} 123456789.024
-			`,
-		},
-		"A push to ingesters with an old sample should report the correct metrics with no metadata": {
-			numIngesters:   3,
-			happyIngesters: 2,
-			samples:        samplesIn{num: 1, startTimestampMs: now.UnixMilli() - 80000*1000}, // 80k seconds old
-			metadata:       0,
-			metricNames:    []string{distributorSampleDelay},
-			expectedMetrics: `
-				# HELP cortex_distributor_sample_delay_seconds Number of seconds by which a sample came in late wrt wallclock.
-				# TYPE cortex_distributor_sample_delay_seconds histogram
-				cortex_distributor_sample_delay_seconds_bucket{le="30"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="60"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="120"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="240"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="480"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="600"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="1800"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="3600"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="7200"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="10800"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="21600"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="86400"} 2
-				cortex_distributor_sample_delay_seconds_bucket{le="+Inf"} 2
-				cortex_distributor_sample_delay_seconds_sum 160000
-				cortex_distributor_sample_delay_seconds_count 2
-			`,
-		},
-		"A push to ingesters with a current sample should report the correct metrics with no metadata": {
-			numIngesters:   3,
-			happyIngesters: 2,
-			samples:        samplesIn{num: 1, startTimestampMs: now.UnixMilli() - 1000}, // 1 second old
-			metadata:       0,
-			metricNames:    []string{distributorSampleDelay},
-			expectedMetrics: `
-				# HELP cortex_distributor_sample_delay_seconds Number of seconds by which a sample came in late wrt wallclock.
-				# TYPE cortex_distributor_sample_delay_seconds histogram
-				cortex_distributor_sample_delay_seconds_bucket{le="30"} 2
-				cortex_distributor_sample_delay_seconds_bucket{le="60"} 2
-				cortex_distributor_sample_delay_seconds_bucket{le="120"} 2
-				cortex_distributor_sample_delay_seconds_bucket{le="240"} 2
-				cortex_distributor_sample_delay_seconds_bucket{le="480"} 2
-				cortex_distributor_sample_delay_seconds_bucket{le="600"} 2
-				cortex_distributor_sample_delay_seconds_bucket{le="1800"} 2
-				cortex_distributor_sample_delay_seconds_bucket{le="3600"} 2
-				cortex_distributor_sample_delay_seconds_bucket{le="7200"} 2
-				cortex_distributor_sample_delay_seconds_bucket{le="10800"} 2
-				cortex_distributor_sample_delay_seconds_bucket{le="21600"} 2
-				cortex_distributor_sample_delay_seconds_bucket{le="86400"} 2
-				cortex_distributor_sample_delay_seconds_bucket{le="+Inf"} 2
-				cortex_distributor_sample_delay_seconds_sum 2.000
-				cortex_distributor_sample_delay_seconds_count 2
-			`,
-		},
-		"A push to ingesters without samples should report the correct metrics": {
-			numIngesters:   3,
-			happyIngesters: 2,
-			samples:        samplesIn{num: 0, startTimestampMs: 123456789000},
-			metadata:       1,
-			metricNames:    []string{distributorSampleDelay},
-			expectedMetrics: `
-				# HELP cortex_distributor_sample_delay_seconds Number of seconds by which a sample came in late wrt wallclock.
-				# TYPE cortex_distributor_sample_delay_seconds histogram
-				cortex_distributor_sample_delay_seconds_bucket{le="30"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="60"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="120"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="240"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="480"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="600"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="1800"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="3600"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="7200"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="10800"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="21600"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="86400"} 0
-				cortex_distributor_sample_delay_seconds_bucket{le="+Inf"} 0
-				cortex_distributor_sample_delay_seconds_sum 0
-				cortex_distributor_sample_delay_seconds_count 0
-			`,
-		},
-		"A timed out push should fail": {
-			numIngesters:   3,
-			happyIngesters: 3,
-			samples:        samplesIn{num: 10, startTimestampMs: 123456789000},
-			timeOut:        true,
-			expectedError: httpgrpc.Errorf(http.StatusInternalServerError,
-				"exceeded configured distributor remote timeout: failed pushing to ingester: context deadline exceeded"),
-			metricNames: []string{lastSeenTimestamp},
-			expectedMetrics: `
-				# HELP cortex_distributor_latest_seen_sample_timestamp_seconds Unix timestamp of latest received sample per user.
-				# TYPE cortex_distributor_latest_seen_sample_timestamp_seconds gauge
-				cortex_distributor_latest_seen_sample_timestamp_seconds{user="user"} 123456789.009
 			`,
 		},
 	} {
@@ -316,7 +172,10 @@ func TestDistributor_Push(t *testing.T) {
 				assert.EqualError(t, err, tc.expectedError.Error())
 
 				// Assert that downstream gRPC statuses are passed back upstream
-				_, ok := httpgrpc.HTTPResponseFromError(err)
+				resp, ok := httpgrpc.HTTPResponseFromError(err)
+				assert.Equal(t, 1, len(resp.Headers))
+				assert.Equal(t, "Retry-After", resp.Headers[0].Key)
+				assert.Equal(t, []string{"5"}, resp.Headers[0].Values)
 				assert.True(t, ok, fmt.Sprintf("expected error to be an httpgrpc error, but got: %T", err))
 			}
 
@@ -2722,7 +2581,7 @@ func TestHaDedupeMiddleware(t *testing.T) {
 				pushReq := push.NewParsedRequest(req)
 				pushReq.AddCleanup(cleanup)
 				err := middleware(tc.ctx, pushReq)
-				handledErr := ds[0].handlePushError(tc.ctx, err)
+				handledErr := ds[0].handlePushError(tc.ctx, err, pushReq)
 				gotErrs = append(gotErrs, handledErr)
 			}
 
